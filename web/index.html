@@ -1,0 +1,24 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RIMAZ Creator Copilot (Nemotron on Nebius Token Factory)</title>
+<style>body{font:16px system-ui;background:#0b0b14;color:#eee;max-width:720px;margin:24px auto;padding:0 12px}
+h1{color:#d4af37;font-size:20px}textarea,input,select{width:100%;padding:8px;margin:4px 0;border-radius:8px;border:1px solid #444;background:#111;color:#eee}
+button{padding:8px 14px;border:0;border-radius:8px;background:#d4af37;margin:4px 4px 4px 0}pre{background:#14142a;padding:10px;border-radius:8px;white-space:pre-wrap}small{color:#9aa}</style></head><body>
+<h1>RIMAZ Creator Copilot</h1><small>Each button calls a different NVIDIA Nemotron model on Nebius Token Factory. The model used is shown under each answer.</small>
+<label>API base <input id="api" value="http://127.0.0.1:8788"></label>
+<label>Product title <input id="title" value="Zellige background pack"></label>
+<label>Description <textarea id="desc" rows="2" dir="auto">50 original zellige backgrounds for designers</textarea></label>
+<label>Language <select id="lang"><option value="darija">Darija</option><option value="fr">French</option><option value="en">English</option></select></label>
+<button id="ad">Write ad (Super)</button><button id="tr">Translate to English (Nano)</button><button id="tag">Hashtags (Nano)</button>
+<label>Channel handle <input id="ch" value="nexastory"></label><button id="st">Weekly plan (Ultra)</button>
+<pre id="out" dir="auto">Ready.</pre><small id="meta"></small>
+<script>
+const $=id=>document.getElementById(id);
+async function go(path,body){ $("out").textContent="Thinking..."; $("meta").textContent="";
+  try{const r=await fetch($("api").value+path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});const j=await r.json();
+    if(!r.ok){$("out").textContent="Error: "+j.error;return;} $("out").textContent=j.text; $("meta").textContent="Model: "+j.model+(j.usage?` | tokens: ${j.usage.total_tokens}`:"");
+  }catch(e){$("out").textContent="Error: "+e.message}}
+$("ad").onclick=()=>go("/api/ad",{title:$("title").value,description:$("desc").value,language:$("lang").value});
+$("tr").onclick=()=>go("/api/translate",{text:$("desc").value,to:"en"});
+$("tag").onclick=()=>go("/api/hashtags",{text:$("title").value+". "+$("desc").value,language:$("lang").value});
+$("st").onclick=()=>go("/api/strategy",{channel_handle:$("ch").value,language:$("lang").value});
+</script></body></html>
