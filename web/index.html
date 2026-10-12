@@ -2,20 +2,28 @@
 <title>RIMAZ Creator Copilot (Nemotron on Nebius Token Factory)</title>
 <style>body{font:16px system-ui;background:#0b0b14;color:#eee;max-width:720px;margin:24px auto;padding:0 12px}
 h1{color:#d4af37;font-size:20px}textarea,input,select{width:100%;padding:8px;margin:4px 0;border-radius:8px;border:1px solid #444;background:#111;color:#eee}
-button{padding:8px 14px;border:0;border-radius:8px;background:#d4af37;margin:4px 4px 4px 0}pre{background:#14142a;padding:10px;border-radius:8px;white-space:pre-wrap}small{color:#9aa}</style></head><body>
-<h1>RIMAZ Creator Copilot</h1><small>Each button calls a different NVIDIA Nemotron model on Nebius Token Factory. The model used is shown under each answer.</small>
-<label>API base <input id="api" value="http://127.0.0.1:8788"></label>
+button{padding:8px 14px;border:0;border-radius:8px;background:#d4af37;margin:4px 4px 4px 0}pre{background:#14142a;padding:10px;border-radius:8px;white-space:pre-wrap}small{color:#9aa}
+#banner{background:#3a2a00;border:1px solid #d4af37;border-radius:8px;padding:8px;margin:8px 0;display:none}
+#badge{display:inline-block;padding:3px 8px;border-radius:6px;font-weight:bold;margin-top:6px}.tpl{background:#7a1f1f}.mdl{background:#1f6b3a}</style></head><body>
+<h1>RIMAZ Creator Copilot</h1>
+<div id="banner">Demo runs in TEMPLATE MODE: no AI model is configured, so answers come from fixed templates and are not Nemotron output.</div>
+<small>With a model key configured, each button calls a different NVIDIA Nemotron model on Nebius Token Factory and the model used is shown under the answer.</small>
+<label>API base <input id="api"></label>
 <label>Product title <input id="title" value="Zellige background pack"></label>
 <label>Description <textarea id="desc" rows="2" dir="auto">50 original zellige backgrounds for designers</textarea></label>
 <label>Language <select id="lang"><option value="darija">Darija</option><option value="fr">French</option><option value="en">English</option></select></label>
 <button id="ad">Write ad (Super)</button><button id="tr">Translate to English (Nano)</button><button id="tag">Hashtags (Nano)</button>
 <label>Channel handle <input id="ch" value="nexastory"></label><button id="st">Weekly plan (Ultra)</button>
-<pre id="out" dir="auto">Ready.</pre><small id="meta"></small>
+<pre id="out" dir="auto">Ready.</pre><span id="badge"></span> <small id="meta"></small>
 <script>
 const $=id=>document.getElementById(id);
-async function go(path,body){ $("out").textContent="Thinking..."; $("meta").textContent="";
+$("api").value=location.protocol.startsWith("http")?location.origin:"http://127.0.0.1:8788";
+fetch($("api").value+"/health").then(r=>r.json()).then(j=>{if(j.mode==="template")$("banner").style.display="block"}).catch(()=>{});
+async function go(path,body){ $("out").textContent="Thinking..."; $("meta").textContent=""; $("badge").textContent=""; $("badge").className="";
   try{const r=await fetch($("api").value+path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});const j=await r.json();
-    if(!r.ok){$("out").textContent="Error: "+j.error;return;} $("out").textContent=j.text; $("meta").textContent="Model: "+j.model+(j.usage?` | tokens: ${j.usage.total_tokens}`:"");
+    if(!r.ok){$("out").textContent="Error: "+j.error;return;} $("out").textContent=j.text;
+    if(j.mode==="template"){$("badge").textContent="TEMPLATE - no model called";$("badge").className="tpl";}
+    else{$("badge").textContent="Model: "+j.model;$("badge").className="mdl";$("meta").textContent=j.usage?`tokens: ${j.usage.total_tokens}`:"";}
   }catch(e){$("out").textContent="Error: "+e.message}}
 $("ad").onclick=()=>go("/api/ad",{title:$("title").value,description:$("desc").value,language:$("lang").value});
 $("tr").onclick=()=>go("/api/translate",{text:$("desc").value,to:"en"});
