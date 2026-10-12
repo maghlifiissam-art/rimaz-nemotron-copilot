@@ -1,3 +1,3 @@
-{ "name": "rimaz-nemotron-copilot", "version": "0.1.0", "type": "module", "license": "MIT",
+{ "name": "rimaz-nemotron-copilot", "version": "0.2.0", "type": "module", "license": "MIT",
   "description": "Creator copilot for RIMAZ powered by NVIDIA Nemotron models on Nebius Token Factory.",
   "scripts": { "start": "node src/node.mjs", "test": "node --test test/copilot.test.mjs" } }
