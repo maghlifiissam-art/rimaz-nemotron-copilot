@@ -1,5 +1,6 @@
 import { TOKEN_FACTORY_URL, MODELS } from "./config.mjs";
 import { NOTICE } from "./templates.mjs";
+import { reserve, settle } from "./caps.mjs";
 
 // One call to Nemotron on Nebius Token Factory (OpenAI-compatible).
 // With no key configured it returns a clearly labelled TEMPLATE answer (mode "template", model null). It never claims a model answer.
@@ -8,6 +9,7 @@ export async function chat({ tier, system, user, env, fetchImpl = fetch, maxToke
     if (typeof template !== "function") throw Object.assign(new Error("NEBIUS_API_KEY is not configured"), { status: 503 });
     return { text: template(), model: null, usage: null, mode: "template", notice: NOTICE };
   }
+  await reserve({ env, tier });
   const model = MODELS[tier];
   if (!model) throw new Error(`unknown tier ${tier}`);
   const res = await fetchImpl(TOKEN_FACTORY_URL, {
@@ -17,5 +19,6 @@ export async function chat({ tier, system, user, env, fetchImpl = fetch, maxToke
   });
   if (!res.ok) throw Object.assign(new Error(`Token Factory ${res.status}: ${(await res.text()).slice(0, 200)}`), { status: 502 });
   const data = await res.json();
+  await settle({ env, usage: data.usage, maxTokens });
   return { text: (data.choices?.[0]?.message?.content || "").trim(), model, usage: data.usage || null, mode: "model" };
 }
