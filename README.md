@@ -1,6 +1,6 @@
 # rimaz-nemotron-copilot
 
-A creator and seller copilot for RIMAZ, a reels platform for Moroccan creators. It is built for NVIDIA Nemotron models served by Nebius Token Factory. Built for the Nebius x NVIDIA Global AI Hackathon, track "Best Apps and Agents". Status: v0.2.
+A creator and seller copilot for RIMAZ, a reels platform for Moroccan creators. It is built for NVIDIA Nemotron models served by Nebius Token Factory. Built for the Nebius x NVIDIA Global AI Hackathon, track "Best Apps and Agents". Status: v0.3.
 
 ## Two modes (read this first)
 
@@ -25,7 +25,7 @@ NEBIUS_API_KEY=... npm start     # model mode
 ```
 `GET /health` returns `{ ok, mode }` with mode `template` or `model`.
 
-Deploy free on Cloudflare Workers (`src/worker.mjs`, also serves the page at `/`). To enable model mode set the key with `wrangler secret put NEBIUS_API_KEY`. No secret belongs in this repo. The RIMAZ publishable key in `src/config.mjs` is public by design. After editing `web/index.html` run `node scripts/gen-page.mjs`.
+Deploy free on Cloudflare Workers (`src/worker.mjs`, also serves the page at `/`). To enable model mode set the key with `wrangler secret put NEBIUS_API_KEY` AND bind a KV namespace as `CAPS` (see `src/caps.mjs`): model calls fail closed with 503 when the binding is missing, and hard caps stop usage at 40 calls/day and 500k total tokens, well under the $1 trial. No secret belongs in this repo. The RIMAZ publishable key in `src/config.mjs` is public by design. After editing `web/index.html` run `node scripts/gen-page.mjs`.
 
 ## What is tested
 Offline tests check tier routing, request shape, template mode on all four routes (no model call, no Nemotron claim), the health mode, the page, and origin rejection. They use a mock of Token Factory and do not prove live model quality.
