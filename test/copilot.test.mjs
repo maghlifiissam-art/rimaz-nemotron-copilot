@@ -13,16 +13,53 @@ function mockFetch(seen) {
     return new Response("[]");
   };
 }
+// In-memory stand-in for the CAPS KV namespace.
+function fakeKV(store = {}) {
+  return { _store: store, get: async (k) => (k in store ? store[k] : null), put: async (k, v) => { store[k] = String(v); } };
+}
+const today = () => new Date().toISOString().slice(0, 10);
 const post = (path, body, env, f) => handle(new Request(`http://x${path}`, { method: "POST", body: JSON.stringify(body) }), env, f);
 
 test("routes each task to the intended Nemotron tier", async () => {
-  const seen = []; const f = mockFetch(seen); const env = { NEBIUS_API_KEY: "test-key" };
+  const seen = []; const f = mockFetch(seen); const env = { NEBIUS_API_KEY: "test-key", CAPS: fakeKV() };
   const r = await post("/api/ad", { title: "Pack", language: "fr" }, env, f);
   await post("/api/translate", { text: "salam", to: "en" }, env, f);
   await post("/api/strategy", { channel_handle: "demo", language: "en" }, env, f);
   assert.deepEqual(seen.map((s) => s.body.model), [MODELS.write, MODELS.fast, MODELS.think]);
   assert.ok(seen.every((s) => s.auth === "Bearer test-key"));
   assert.equal((await r.json()).mode, "model");
+});
+
+test("caps: daily limit blocks with 429 once reached", async () => {
+  const kv = fakeKV({ [`day:${today()}`]: "40" });
+  const r = await post("/api/ad", { title: "Pack" }, { NEBIUS_API_KEY: "k", CAPS: kv }, mockFetch([]));
+  assert.equal(r.status, 429); assert.match((await r.json()).error, /daily demo limit/);
+});
+
+test("caps: cumulative token budget blocks with 429 once reached", async () => {
+  const kv = fakeKV({ total_tokens: "500000" });
+  const r = await post("/api/ad", { title: "Pack" }, { NEBIUS_API_KEY: "k", CAPS: kv }, mockFetch([]));
+  assert.equal(r.status, 429); assert.match((await r.json()).error, /budget exhausted/);
+});
+
+test("caps: think tier has its own smaller daily limit", async () => {
+  const kv = fakeKV({ [`think:${today()}`]: "5" });
+  const r = await post("/api/strategy", { channel_handle: "demo" }, { NEBIUS_API_KEY: "k", CAPS: kv }, mockFetch([]));
+  assert.equal(r.status, 429); assert.match((await r.json()).error, /strategy limit/);
+});
+
+test("caps: a key without the CAPS binding fails closed (503, no call)", async () => {
+  const seen = [];
+  const r = await post("/api/ad", { title: "Pack" }, { NEBIUS_API_KEY: "k" }, mockFetch(seen));
+  assert.equal(r.status, 503); assert.equal(seen.length, 0, "no Token Factory call when the limiter is missing");
+});
+
+test("caps: calls and tokens are counted", async () => {
+  const kv = fakeKV();
+  const env = { NEBIUS_API_KEY: "k", CAPS: kv };
+  await post("/api/ad", { title: "Pack" }, env, mockFetch([]));
+  assert.equal(kv._store[`day:${today()}`], "1");
+  assert.equal(kv._store.total_tokens, "1");
 });
 
 test("without a key every route returns a labelled TEMPLATE answer, never a model claim", async () => {
