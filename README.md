@@ -7,7 +7,7 @@ A creator and seller copilot for RIMAZ, a reels platform for Moroccan creators. 
 - **Model mode** (a `NEBIUS_API_KEY` is configured): every task makes a runtime call to the Token Factory chat completions API (`https://api.tokenfactory.nebius.com/v1/chat/completions`) and routes to the model that fits the job. The page shows the model id under each answer.
 - **Template mode** (no key): the app does NOT call any model. Each route returns a fixed template answer labelled `TEMPLATE - no model called`. Template mode is a fallback so the app is runnable without credentials. It is not a model answer and not Nemotron output.
 
-Live Nemotron output has not been tested yet. This README will say so until it has been.
+Live Nemotron output is verified on all four routes (Oct 19, 2026): the page shows the model id under each answer. Model mode is protected by hard KV caps (40 calls/day, 5 strategy calls/day, 500k total tokens) and fails closed if the caps binding is missing.
 
 | Task | Endpoint | Model (model mode) | Why |
 |---|---|---|---|
