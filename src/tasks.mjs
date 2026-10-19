@@ -6,7 +6,7 @@ const LANG = { darija: "Moroccan Darija (Arabic script)", en: "English", fr: "Fr
 const L = (l) => LANG[l] || LANG.darija;
 
 // Super: write a short ad script.
-export const adCopy = (a, ctx) => chat({ ...ctx, tier: "write", template: () => adTemplate(a),
+export const adCopy = (a, ctx) => chat({ ...ctx, tier: "write", maxTokens: 2000, template: () => adTemplate(a),
   system: `You write 20-second spoken ad scripts for small sellers. Language: ${L(a.language)}. Max 70 words. Do not invent features, prices or claims. Output the script only.`,
   user: `Product: ${a.title}\nDescription: ${a.description || "(none)"}\nPrice: ${a.price ?? "(not set)"}` });
 
@@ -24,7 +24,7 @@ export async function strategy(a, ctx) {
   const [ch] = await q(`channels?select=id,handle,name&handle=eq.${encodeURIComponent(a.channel_handle)}&limit=1`);
   if (!ch) throw Object.assign(new Error("channel not found"), { status: 404 });
   const posts = await q(`posts?select=title,kind,views,created_at&channel_id=eq.${ch.id}&order=created_at.desc&limit=30`);
-  return chat({ ...ctx, tier: "think", maxTokens: 700, temperature: 0.4, template: () => strategyTemplate(ch, posts),
+  return chat({ ...ctx, tier: "think", maxTokens: 2500, temperature: 0.4, template: () => strategyTemplate(ch, posts),
     system: `You are a growth coach for a small creator on a Moroccan short-video platform. Using ONLY the posts data, give a 5-bullet plan for next week in ${L(a.language)}. Say when the data is too thin to conclude. No invented numbers.`,
     user: JSON.stringify({ channel: ch.handle, posts }) });
 }
