@@ -2,8 +2,13 @@ name = "rimaz-nemotron-copilot"
 main = "src/worker.mjs"
 compatibility_date = "2026-10-01"
 # Secret: wrangler secret put NEBIUS_API_KEY  (never committed)
-# Hard cost caps for model mode: a KV namespace bound as CAPS is REQUIRED -
+# Hard cost caps for model mode: the CAPS_DO Durable Object binding is REQUIRED -
 # src/caps.mjs fails closed (503 on model calls) when the binding is missing.
-# [[kv_namespaces]]
-# binding = "CAPS"
-# id = "<namespace id from the Cloudflare dashboard>"
+# One global CapsDO serializes reserve/settle: worst-case tokens are reserved
+# before each model call and settled to actual usage after.
+# [[durable_objects.bindings]]
+# name = "CAPS_DO"
+# class_name = "CapsDO"
+# [[migrations]]
+# tag = "v1"
+# new_sqlite_classes = ["CapsDO"]
