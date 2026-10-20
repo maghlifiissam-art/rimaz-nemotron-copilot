@@ -10,7 +10,8 @@ function mockFetch(seen, opts = {}) {
     const u = String(url);
     if (u.includes("tokenfactory.nebius.com")) {
       seen.push({ url: u, auth: init.headers.Authorization, body: JSON.parse(init.body) });
-      if (opts.failModel) return new Response("boom", { status: 500 });
+      if (opts.throwError) throw new TypeError("fetch failed");
+      if (opts.failModel) return new Response("boom", { status: opts.providerStatus ?? 500 });
       return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }], usage: { total_tokens: opts.tokens ?? 1 } }));
     }
     if (u.includes("/channels?")) return new Response(JSON.stringify([{ id: "c1", handle: "demo", name: "Demo" }]));
@@ -65,25 +66,59 @@ test("caps: concurrency - 45 simultaneous requests, exactly 40 pass, no lost upd
 test("caps: near-ceiling - worst-case reservation blocks before the call, settlement frees the difference", async () => {
   const env = { NEBIUS_API_KEY: "k", CAPS_DO: await fakeCaps(seedState({ totalTokens: 495_000 })) };
   const f = mockFetch([], { tokens: 160 });
-  const r1 = await post("/api/hashtags", { text: "x" }, env, f); // worst 3120 -> 498120 ok
-  const r2 = await post("/api/hashtags", { text: "x" }, env, f); // 495160+3120 -> 498280 ok
+  const r1 = await post("/api/hashtags", { text: "x" }, env, f); // worst ~270 -> settles to actual 160
+  const r2 = await post("/api/hashtags", { text: "x" }, env, f); // same again
   assert.equal(r1.status, 200); assert.equal(r2.status, 200);
   const caps = await capsStatus(env);
   assert.equal(caps.tokensTotal, 495_320, "settled to actual usage, not worst case");
   // Push to the ceiling: seed just under it and confirm a worst-case that would cross is refused before any call
-  const env2 = { NEBIUS_API_KEY: "k", CAPS_DO: await fakeCaps(seedState({ totalTokens: 498_000 })) };
+  const env2 = { NEBIUS_API_KEY: "k", CAPS_DO: await fakeCaps(seedState({ totalTokens: 499_900 })) };
   const seen = [];
   const r4 = await post("/api/hashtags", { text: "x" }, env2, mockFetch(seen));
   assert.equal(r4.status, 429); assert.match((await r4.json()).error, /budget exhausted/);
   assert.equal(seen.length, 0, "no Token Factory call once the worst case would cross the ceiling");
 });
 
-test("caps: a failed model call frees the whole reservation", async () => {
+test("caps: provider 5xx keeps the worst-case reservation (uncertain outcome)", async () => {
   const env = { NEBIUS_API_KEY: "k", CAPS_DO: await fakeCaps() };
   const r = await post("/api/ad", { title: "Pack" }, env, mockFetch([], { failModel: true }));
   assert.equal(r.status, 502);
   const caps = await capsStatus(env);
-  assert.equal(caps.tokensTotal, 0, "reservation freed after failure");
+  assert.equal(caps.callsToday, 1);
+  assert.ok(caps.tokensTotal > 0, "a 5xx says nothing about billing - the worst case stays reserved");
+});
+
+test("caps: network error keeps the worst-case reservation (uncertain outcome)", async () => {
+  const env = { NEBIUS_API_KEY: "k", CAPS_DO: await fakeCaps() };
+  const r = await post("/api/ad", { title: "Pack" }, env, mockFetch([], { throwError: true }));
+  assert.equal(r.status, 500);
+  const caps = await capsStatus(env);
+  assert.ok(caps.tokensTotal > 0, "the provider may already have processed a billable request");
+});
+
+test("caps: provider 4xx rejection frees the reservation (evidence of no billable call)", async () => {
+  const env = { NEBIUS_API_KEY: "k", CAPS_DO: await fakeCaps() };
+  const r = await post("/api/ad", { title: "Pack" }, env, mockFetch([], { failModel: true, providerStatus: 401 }));
+  assert.equal(r.status, 502);
+  const caps = await capsStatus(env);
+  assert.equal(caps.tokensTotal, 0, "a 4xx rejection proves no billable processing happened");
+});
+
+test("bounds: an oversized field is rejected before any model call, no reservation spent", async () => {
+  const seen = []; const env = { NEBIUS_API_KEY: "k", CAPS_DO: await fakeCaps() };
+  const r = await post("/api/translate", { text: "x".repeat(2001), to: "en" }, env, mockFetch(seen));
+  assert.equal(r.status, 400); assert.match((await r.json()).error, /field too long: text/);
+  assert.equal(seen.length, 0, "no Token Factory call");
+  const caps = await capsStatus(env);
+  assert.deepEqual([caps.callsToday, caps.tokensTotal], [0, 0], "no budget consumed by rejected input");
+});
+
+test("bounds: a body over the size cap is rejected before any model call", async () => {
+  const seen = []; const env = { NEBIUS_API_KEY: "k", CAPS_DO: await fakeCaps() };
+  const big = JSON.stringify({ text: "x".repeat(9000), to: "en" });
+  const r = await handle(new Request("http://x/api/translate", { method: "POST", headers: { "content-length": String(big.length) }, body: big }), env, mockFetch(seen));
+  assert.equal(r.status, 413);
+  assert.equal(seen.length, 0, "no Token Factory call");
 });
 
 test("caps: think tier has its own smaller daily limit", async () => {
