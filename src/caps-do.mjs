@@ -6,7 +6,6 @@
 export const DAY_LIMIT = 40;
 export const THINK_DAY_LIMIT = 5;
 export const TOTAL_TOKEN_LIMIT = 500_000;
-export const PROMPT_WORST_TOKENS = 3000; // conservative bound on prompt tokens
 
 const today = () => new Date().toISOString().slice(0, 10);
 const fresh = () => ({ day: today(), dayCalls: 0, thinkCalls: 0, totalTokens: 0 });
