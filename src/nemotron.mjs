@@ -9,16 +9,22 @@ export async function chat({ tier, system, user, env, fetchImpl = fetch, maxToke
     if (typeof template !== "function") throw Object.assign(new Error("NEBIUS_API_KEY is not configured"), { status: 503 });
     return { text: template(), model: null, usage: null, mode: "template", notice: NOTICE };
   }
-  await reserve({ env, tier });
+  const reserved = await reserve({ env, tier, maxTokens });
   const model = MODELS[tier];
-  if (!model) throw new Error(`unknown tier ${tier}`);
-  const res = await fetchImpl(TOKEN_FACTORY_URL, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${env.NEBIUS_API_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model, temperature, max_tokens: maxTokens, messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
-  });
-  if (!res.ok) throw Object.assign(new Error(`Token Factory ${res.status}: ${(await res.text()).slice(0, 200)}`), { status: 502 });
-  const data = await res.json();
-  await settle({ env, usage: data.usage, maxTokens });
-  return { text: (data.choices?.[0]?.message?.content || "").trim(), model, usage: data.usage || null, mode: "model" };
+  if (!model) { await settle({ env, actualTokens: 0, reserved }); throw new Error(`unknown tier ${tier}`); }
+  try {
+    const res = await fetchImpl(TOKEN_FACTORY_URL, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${env.NEBIUS_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model, temperature, max_tokens: maxTokens, messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
+    });
+    if (!res.ok) throw Object.assign(new Error(`Token Factory ${res.status}: ${(await res.text()).slice(0, 200)}`), { status: 502 });
+    const data = await res.json();
+    const actual = data.usage?.total_tokens > 0 ? data.usage.total_tokens : reserved;
+    await settle({ env, actualTokens: actual, reserved });
+    return { text: (data.choices?.[0]?.message?.content || "").trim(), model, usage: data.usage || null, mode: "model" };
+  } catch (e) {
+    await settle({ env, actualTokens: 0, reserved });
+    throw e;
+  }
 }
