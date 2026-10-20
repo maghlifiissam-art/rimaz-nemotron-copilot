@@ -9,7 +9,10 @@ export async function chat({ tier, system, user, env, fetchImpl = fetch, maxToke
     if (typeof template !== "function") throw Object.assign(new Error("NEBIUS_API_KEY is not configured"), { status: 503 });
     return { text: template(), model: null, usage: null, mode: "template", notice: NOTICE };
   }
-  const reserved = await reserve({ env, tier, maxTokens });
+  // Reserve the true worst case BEFORE the call: max_tokens plus the real
+  // prompt size (chars are a hard upper bound on BPE tokens). Inputs are
+  // length-bounded upstream, so this number is bounded too.
+  const reserved = await reserve({ env, tier, maxTokens, promptChars: system.length + user.length });
   const model = MODELS[tier];
   if (!model) { await settle({ env, actualTokens: 0, reserved }); throw new Error(`unknown tier ${tier}`); }
   try {
@@ -18,13 +21,24 @@ export async function chat({ tier, system, user, env, fetchImpl = fetch, maxToke
       headers: { Authorization: `Bearer ${env.NEBIUS_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({ model, temperature, max_tokens: maxTokens, messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
     });
-    if (!res.ok) throw Object.assign(new Error(`Token Factory ${res.status}: ${(await res.text()).slice(0, 200)}`), { status: 502 });
+    if (!res.ok) {
+      const e = Object.assign(new Error(`Token Factory ${res.status}: ${(await res.text()).slice(0, 200)}`), { status: 502 });
+      // A 4xx from the provider is evidence the request was rejected before any
+      // billable processing (auth, bad request, rate limit) - the reservation
+      // can be freed. 5xx says nothing about billing: it stays reserved.
+      if (res.status >= 400 && res.status < 500) e.billable = false;
+      throw e;
+    }
     const data = await res.json();
     const actual = data.usage?.total_tokens > 0 ? data.usage.total_tokens : reserved;
     await settle({ env, actualTokens: actual, reserved });
     return { text: (data.choices?.[0]?.message?.content || "").trim(), model, usage: data.usage || null, mode: "model" };
   } catch (e) {
-    await settle({ env, actualTokens: 0, reserved });
+    // Free the reservation ONLY when there is evidence no billable call
+    // happened (never sent, or provider rejected with 4xx). Network, read or
+    // JSON errors are uncertain - the provider may already have processed a
+    // billable request - so the worst case stays reserved.
+    if (e.billable === false) await settle({ env, actualTokens: 0, reserved });
     throw e;
   }
 }
