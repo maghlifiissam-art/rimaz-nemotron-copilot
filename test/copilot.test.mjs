@@ -2,26 +2,42 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { handle } from "../src/handler.mjs";
 import { MODELS } from "../src/config.mjs";
+import { CapsDO } from "../src/caps-do.mjs";
 
 // These tests use a MOCK of Token Factory to check routing and request shape. They do not prove live model quality.
-function mockFetch(seen) {
+function mockFetch(seen, opts = {}) {
   return async (url, init) => {
     const u = String(url);
-    if (u.includes("tokenfactory.nebius.com")) { seen.push({ url: u, auth: init.headers.Authorization, body: JSON.parse(init.body) }); return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }], usage: { total_tokens: 1 } })); }
+    if (u.includes("tokenfactory.nebius.com")) {
+      seen.push({ url: u, auth: init.headers.Authorization, body: JSON.parse(init.body) });
+      if (opts.failModel) return new Response("boom", { status: 500 });
+      return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }], usage: { total_tokens: opts.tokens ?? 1 } }));
+    }
     if (u.includes("/channels?")) return new Response(JSON.stringify([{ id: "c1", handle: "demo", name: "Demo" }]));
     if (u.includes("/posts?")) return new Response(JSON.stringify([{ title: "a", kind: "text", views: 3 }]));
     return new Response("[]");
   };
 }
-// In-memory stand-in for the CAPS KV namespace.
-function fakeKV(store = {}) {
-  return { _store: store, get: async (k) => (k in store ? store[k] : null), put: async (k, v) => { store[k] = String(v); } };
+// Real CapsDO over in-memory storage, exposed like the CAPS_DO binding.
+async function fakeCaps(seed) {
+  const store = new Map(seed ? [["state", seed]] : []);
+  let ready;
+  const ctx = {
+    storage: { get: async (k) => store.get(k), put: async (k, v) => { store.set(k, v); } },
+    blockConcurrencyWhile: (fn) => { ready = fn(); },
+    waitUntil: () => {},
+  };
+  const instance = new CapsDO(ctx);
+  await ready;
+  return { idFromName: () => "global", get: () => ({ fetch: (u, i) => instance.fetch(new Request(u, i)) }), _instance: instance };
 }
 const today = () => new Date().toISOString().slice(0, 10);
+const seedState = (over = {}) => ({ day: today(), dayCalls: 0, thinkCalls: 0, totalTokens: 0, ...over });
 const post = (path, body, env, f) => handle(new Request(`http://x${path}`, { method: "POST", body: JSON.stringify(body) }), env, f);
+const capsStatus = async (env) => (await (await handle(new Request("http://x/health"), env)).json()).caps;
 
 test("routes each task to the intended Nemotron tier", async () => {
-  const seen = []; const f = mockFetch(seen); const env = { NEBIUS_API_KEY: "test-key", CAPS: fakeKV() };
+  const seen = []; const f = mockFetch(seen); const env = { NEBIUS_API_KEY: "test-key", CAPS_DO: await fakeCaps() };
   const r = await post("/api/ad", { title: "Pack", language: "fr" }, env, f);
   await post("/api/translate", { text: "salam", to: "en" }, env, f);
   await post("/api/strategy", { channel_handle: "demo", language: "en" }, env, f);
@@ -31,35 +47,63 @@ test("routes each task to the intended Nemotron tier", async () => {
 });
 
 test("caps: daily limit blocks with 429 once reached", async () => {
-  const kv = fakeKV({ [`day:${today()}`]: "40" });
-  const r = await post("/api/ad", { title: "Pack" }, { NEBIUS_API_KEY: "k", CAPS: kv }, mockFetch([]));
+  const env = { NEBIUS_API_KEY: "k", CAPS_DO: await fakeCaps(seedState({ dayCalls: 40 })) };
+  const r = await post("/api/ad", { title: "Pack" }, env, mockFetch([]));
   assert.equal(r.status, 429); assert.match((await r.json()).error, /daily demo limit/);
 });
 
-test("caps: cumulative token budget blocks with 429 once reached", async () => {
-  const kv = fakeKV({ total_tokens: "500000" });
-  const r = await post("/api/ad", { title: "Pack" }, { NEBIUS_API_KEY: "k", CAPS: kv }, mockFetch([]));
-  assert.equal(r.status, 429); assert.match((await r.json()).error, /budget exhausted/);
+test("caps: concurrency - 45 simultaneous requests, exactly 40 pass, no lost updates", async () => {
+  const env = { NEBIUS_API_KEY: "k", CAPS_DO: await fakeCaps() };
+  const results = await Promise.all(Array.from({ length: 45 }, () => post("/api/hashtags", { text: "x" }, env, mockFetch([]))));
+  const ok = results.filter((r) => r.status === 200).length;
+  const limited = results.filter((r) => r.status === 429).length;
+  assert.equal(ok, 40); assert.equal(limited, 5);
+  const caps = await capsStatus(env);
+  assert.equal(caps.callsToday, 40, "every reservation counted exactly once");
+});
+
+test("caps: near-ceiling - worst-case reservation blocks before the call, settlement frees the difference", async () => {
+  const env = { NEBIUS_API_KEY: "k", CAPS_DO: await fakeCaps(seedState({ totalTokens: 495_000 })) };
+  const f = mockFetch([], { tokens: 160 });
+  const r1 = await post("/api/hashtags", { text: "x" }, env, f); // worst 3120 -> 498120 ok
+  const r2 = await post("/api/hashtags", { text: "x" }, env, f); // 495160+3120 -> 498280 ok
+  assert.equal(r1.status, 200); assert.equal(r2.status, 200);
+  const caps = await capsStatus(env);
+  assert.equal(caps.tokensTotal, 495_320, "settled to actual usage, not worst case");
+  // Push to the ceiling: seed just under it and confirm a worst-case that would cross is refused before any call
+  const env2 = { NEBIUS_API_KEY: "k", CAPS_DO: await fakeCaps(seedState({ totalTokens: 498_000 })) };
+  const seen = [];
+  const r4 = await post("/api/hashtags", { text: "x" }, env2, mockFetch(seen));
+  assert.equal(r4.status, 429); assert.match((await r4.json()).error, /budget exhausted/);
+  assert.equal(seen.length, 0, "no Token Factory call once the worst case would cross the ceiling");
+});
+
+test("caps: a failed model call frees the whole reservation", async () => {
+  const env = { NEBIUS_API_KEY: "k", CAPS_DO: await fakeCaps() };
+  const r = await post("/api/ad", { title: "Pack" }, env, mockFetch([], { failModel: true }));
+  assert.equal(r.status, 502);
+  const caps = await capsStatus(env);
+  assert.equal(caps.tokensTotal, 0, "reservation freed after failure");
 });
 
 test("caps: think tier has its own smaller daily limit", async () => {
-  const kv = fakeKV({ [`think:${today()}`]: "5" });
-  const r = await post("/api/strategy", { channel_handle: "demo" }, { NEBIUS_API_KEY: "k", CAPS: kv }, mockFetch([]));
+  const env = { NEBIUS_API_KEY: "k", CAPS_DO: await fakeCaps(seedState({ thinkCalls: 5 })) };
+  const r = await post("/api/strategy", { channel_handle: "demo" }, env, mockFetch([]));
   assert.equal(r.status, 429); assert.match((await r.json()).error, /strategy limit/);
 });
 
-test("caps: a key without the CAPS binding fails closed (503, no call)", async () => {
+test("caps: a key without the CAPS_DO binding fails closed (503, no call)", async () => {
   const seen = [];
   const r = await post("/api/ad", { title: "Pack" }, { NEBIUS_API_KEY: "k" }, mockFetch(seen));
   assert.equal(r.status, 503); assert.equal(seen.length, 0, "no Token Factory call when the limiter is missing");
 });
 
-test("caps: calls and tokens are counted", async () => {
-  const kv = fakeKV();
-  const env = { NEBIUS_API_KEY: "k", CAPS: kv };
-  await post("/api/ad", { title: "Pack" }, env, mockFetch([]));
-  assert.equal(kv._store[`day:${today()}`], "1");
-  assert.equal(kv._store.total_tokens, "1");
+test("caps: calls and tokens are counted at actuals", async () => {
+  const env = { NEBIUS_API_KEY: "k", CAPS_DO: await fakeCaps() };
+  await post("/api/ad", { title: "Pack" }, env, mockFetch([], { tokens: 1 }));
+  const caps = await capsStatus(env);
+  assert.equal(caps.callsToday, 1);
+  assert.equal(caps.tokensTotal, 1);
 });
 
 test("without a key every route returns a labelled TEMPLATE answer, never a model claim", async () => {
