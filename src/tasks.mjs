@@ -23,7 +23,10 @@ export async function strategy(a, ctx) {
   const q = (p) => f(`${SUPABASE_URL}/rest/v1/${p}`, { headers: h }).then((r) => r.json());
   const [ch] = await q(`channels?select=id,handle,name&handle=eq.${encodeURIComponent(a.channel_handle)}&limit=1`);
   if (!ch) throw Object.assign(new Error("channel not found"), { status: 404 });
-  const posts = await q(`posts?select=title,kind,views,created_at&channel_id=eq.${ch.id}&order=created_at.desc&limit=30`);
+  const rawPosts = await q(`posts?select=title,kind,views,created_at&channel_id=eq.${ch.id}&order=created_at.desc&limit=30`);
+  // Bound the prompt even when post titles in the database are long: the
+  // worst-case token reservation must cover the whole prompt.
+  const posts = (Array.isArray(rawPosts) ? rawPosts : []).slice(0, 30).map((p) => ({ ...p, title: String(p?.title ?? "").slice(0, 120) }));
   return chat({ ...ctx, tier: "think", maxTokens: 2500, temperature: 0.4, template: () => strategyTemplate(ch, posts),
     system: `You are a growth coach for a small creator on a Moroccan short-video platform. Using ONLY the posts data, give a 5-bullet plan for next week in ${L(a.language)}. Say when the data is too thin to conclude. No invented numbers.`,
     user: JSON.stringify({ channel: ch.handle, posts }) });
