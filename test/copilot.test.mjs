@@ -20,7 +20,7 @@ function mockFetch(seen, opts = {}) {
   };
 }
 // Real CapsDO over in-memory storage, exposed like the CAPS_DO binding.
-async function fakeCaps(seed) {
+async function fakeCaps(seed, reserveLog) {
   const store = new Map(seed ? [["state", seed]] : []);
   let ready;
   const ctx = {
@@ -30,7 +30,7 @@ async function fakeCaps(seed) {
   };
   const instance = new CapsDO(ctx);
   await ready;
-  return { idFromName: () => "global", get: () => ({ fetch: (u, i) => instance.fetch(new Request(u, i)) }), _instance: instance };
+  return { idFromName: () => "global", get: () => ({ fetch: (u, i) => { if (reserveLog && String(u).includes("/reserve")) reserveLog.push(JSON.parse(i.body)); return instance.fetch(new Request(u, i)); } }), _instance: instance };
 }
 const today = () => new Date().toISOString().slice(0, 10);
 const seedState = (over = {}) => ({ day: today(), dayCalls: 0, thinkCalls: 0, totalTokens: 0, ...over });
@@ -119,6 +119,32 @@ test("bounds: a body over the size cap is rejected before any model call", async
   const r = await handle(new Request("http://x/api/translate", { method: "POST", headers: { "content-length": String(big.length) }, body: big }), env, mockFetch(seen));
   assert.equal(r.status, 413);
   assert.equal(seen.length, 0, "no Token Factory call");
+});
+
+test("caps: reservation = max_tokens + real UTF-8 prompt bytes + framing (exact, Arabic input)", async () => {
+  const reserveLog = []; const seen = [];
+  const env = { NEBIUS_API_KEY: "k", CAPS_DO: await fakeCaps(undefined, reserveLog) };
+  const arabic = "تسويق المنتجات المغربية التقليدية"; // every letter is 2 UTF-8 bytes
+  const r = await post("/api/hashtags", { text: arabic, language: "darija" }, env, mockFetch(seen));
+  assert.equal(r.status, 200);
+  const msgs = seen[0].body.messages;
+  const enc = new TextEncoder();
+  const promptBytes = enc.encode(msgs[0].content).length + enc.encode(msgs[1].content).length;
+  const promptChars = msgs[0].content.length + msgs[1].content.length;
+  assert.ok(promptBytes > promptChars, "test input really is multibyte");
+  assert.equal(reserveLog[0].worstTokens, 120 + promptBytes + 64, "reserved = max_tokens + real prompt bytes + framing allowance");
+  assert.ok(reserveLog[0].worstTokens > 120 + promptChars + 64, "byte accounting reserves more than char accounting for Arabic - chars would under-reserve");
+});
+
+test("caps: an oversized reservation is rejected by the DO, never silently clamped", async () => {
+  const caps = await fakeCaps();
+  const stub = caps.get();
+  const big = await stub.fetch("https://caps/reserve", { method: "POST", body: JSON.stringify({ tier: "fast", worstTokens: 25000 }) });
+  assert.equal(big.status, 400); assert.match((await big.json()).reason, /too large/);
+  const zero = await stub.fetch("https://caps/reserve", { method: "POST", body: JSON.stringify({ tier: "fast", worstTokens: 0 }) });
+  assert.equal(zero.status, 400);
+  const s = await (await stub.fetch("https://caps/status")).json();
+  assert.deepEqual([s.callsToday, s.tokensTotal], [0, 0], "a rejected reservation consumes nothing");
 });
 
 test("caps: think tier has its own smaller daily limit", async () => {
