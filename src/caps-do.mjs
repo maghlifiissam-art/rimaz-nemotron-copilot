@@ -6,6 +6,9 @@
 export const DAY_LIMIT = 40;
 export const THINK_DAY_LIMIT = 5;
 export const TOTAL_TOKEN_LIMIT = 500_000;
+// Defense in depth: one reservation must never exceed this. REJECTED, never
+// silently clamped - a clamped reservation could under-count a real call.
+export const MAX_RESERVATION_TOKENS = 20_000;
 
 const today = () => new Date().toISOString().slice(0, 10);
 const fresh = () => ({ day: today(), dayCalls: 0, thinkCalls: 0, totalTokens: 0 });
@@ -29,7 +32,9 @@ export class CapsDO {
     const url = new URL(request.url);
     const body = request.method === "POST" ? await request.json().catch(() => ({})) : {};
     if (url.pathname === "/reserve") {
-      const worst = Math.max(1, Math.min(body.worstTokens | 0, 20000));
+      const worst = body.worstTokens | 0;
+      if (worst < 1) return Response.json({ ok: false, reason: "invalid reservation" }, { status: 400 });
+      if (worst > MAX_RESERVATION_TOKENS) return Response.json({ ok: false, reason: "reservation too large" }, { status: 400 });
       const tier = String(body.tier || "");
       // All mutations below are synchronous on in-memory state: the single
       // threaded Durable Object makes this check-and-reserve atomic.
