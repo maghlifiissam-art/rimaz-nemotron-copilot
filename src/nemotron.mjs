@@ -10,9 +10,13 @@ export async function chat({ tier, system, user, env, fetchImpl = fetch, maxToke
     return { text: template(), model: null, usage: null, mode: "template", notice: NOTICE };
   }
   // Reserve the true worst case BEFORE the call: max_tokens plus the real
-  // prompt size (chars are a hard upper bound on BPE tokens). Inputs are
-  // length-bounded upstream, so this number is bounded too.
-  const reserved = await reserve({ env, tier, maxTokens, promptChars: system.length + user.length });
+  // prompt size. UTF-8 BYTES are the hard upper bound on prompt tokens (one
+  // token per byte is the worst case for byte-level BPE; a character count
+  // would under-count Arabic and other multibyte scripts). A framing
+  // allowance for the server-side chat template is added inside reserve().
+  // Inputs are length-bounded upstream, so this number is bounded too.
+  const enc = new TextEncoder();
+  const reserved = await reserve({ env, tier, maxTokens, promptBytes: enc.encode(system).length + enc.encode(user).length });
   const model = MODELS[tier];
   if (!model) { await settle({ env, actualTokens: 0, reserved }); throw new Error(`unknown tier ${tier}`); }
   try {
