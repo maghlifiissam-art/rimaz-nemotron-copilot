@@ -1,21 +1,25 @@
 // Client helpers for the CapsDO budget authority. Fail-closed: when the
 // CAPS_DO binding is missing, model calls are refused (503), never uncapped.
 
+// Worst-case prompt sizing. A character count is NOT an upper bound on tokens
+// for multilingual text: byte-level BPE tokenizers (the Llama/Nemotron family)
+// can emit up to one token per UTF-8 BYTE, and an Arabic letter is two bytes.
+// A token always covers at least one byte, so the UTF-8 byte length of the
+// prompt is the documented hard upper bound on its token count.
+// FRAMING_TOKENS covers the server-side chat template that is not visible in
+// system+user (role headers, eot markers, generation priming): the Llama-3
+// style template costs ~6 special tokens per message, so 64 is generous.
+export const FRAMING_TOKENS = 64;
+export const worstFor = (maxTokens, promptBytes) => maxTokens + Math.max(0, promptBytes | 0) + FRAMING_TOKENS;
+
 function stub(env) {
   if (!env?.CAPS_DO) throw Object.assign(new Error("rate limiter not configured"), { status: 503 });
   return env.CAPS_DO.get(env.CAPS_DO.idFromName("global"));
 }
 
-// Worst-case tokens for one call: completion budget + a hard upper bound on
-// prompt tokens. A BPE token always covers at least one character, so the
-// prompt's character count is a true ceiling on its token count; the caller
-// passes the REAL prompt size (inputs are length-bounded in handler.mjs), so
-// this reservation always covers the worst billable case.
-export const worstFor = (maxTokens, promptChars) => maxTokens + Math.max(0, promptChars | 0);
-
 // Reserve worst-case tokens BEFORE the model call. Throws 429 over any cap.
-export async function reserve({ env, tier, maxTokens, promptChars }) {
-  const res = await stub(env).fetch("https://caps/reserve", { method: "POST", body: JSON.stringify({ tier, worstTokens: worstFor(maxTokens, promptChars) }) });
+export async function reserve({ env, tier, maxTokens, promptBytes }) {
+  const res = await stub(env).fetch("https://caps/reserve", { method: "POST", body: JSON.stringify({ tier, worstTokens: worstFor(maxTokens, promptBytes) }) });
   const data = await res.json();
   if (!res.ok) throw Object.assign(new Error(data.reason || "rate limited"), { status: res.status });
   return data.reserved;
